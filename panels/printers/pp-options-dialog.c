@@ -826,6 +826,15 @@ options_dialog_response_cb (GtkDialog *_dialog,
     dialog->user_callback (GTK_DIALOG (dialog->dialog), response_id, dialog->user_data);
 }
 
+static void
+test_page_cb (GtkWidget *button,
+              gpointer  *user_data)
+{
+  PpOptionsDialog *dialog = (PpOptionsDialog*) user_data;
+
+
+}
+
 PpOptionsDialog *
 pp_options_dialog_new (GtkWindow            *parent,
                        UserResponseCallback  user_callback,
@@ -834,9 +843,11 @@ pp_options_dialog_new (GtkWindow            *parent,
                        gboolean              sensitive)
 {
   PpOptionsDialog *dialog;
+  GtkButton       *test_page_button;
   GError          *error = NULL;
   gchar           *objects[] = { "options-dialog", NULL };
   guint            builder_result;
+  gchar           *title;
 
   dialog = g_new0 (PpOptionsDialog, 1);
 
@@ -878,7 +889,12 @@ pp_options_dialog_new (GtkWindow            *parent,
   /* connect signals */
   g_signal_connect (dialog->dialog, "response", G_CALLBACK (options_dialog_response_cb), dialog);
 
-  gtk_window_set_title (GTK_WINDOW (dialog->dialog), printer_name);
+  title = g_strdup_printf (_("%s Options"), printer_name);
+  gtk_window_set_title (GTK_WINDOW (dialog->dialog), title);
+  g_free (title);
+
+  test_page_button = (GtkButton *) gtk_builder_get_object (dialog->builder, "test-page-button");
+  g_signal_connect (test_page_button, "clicked", G_CALLBACK (test_page_cb), dialog);
 
   gtk_widget_show_all (GTK_WIDGET (dialog->dialog));
 
