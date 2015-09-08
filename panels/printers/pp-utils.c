@@ -3856,18 +3856,33 @@ job_cancel_purge_async_dbus_cb (GObject      *source_object,
       g_error_free (error);
     }
 
-  data->callback (data->user_data);
-
   if (data->cancellable)
     g_object_unref (data->cancellable);
   g_free (data);
 }
 
 void
+job_cancel_purge_all (cups_job_t   *jobs,
+                      gint          num_of_jobs,
+                      gboolean      job_purge,
+                      GCancellable *cancellable,
+                      gpointer      user_data)
+{
+  gint i;
+
+  for (i = 0; i < num_of_jobs; i++)
+   {
+     job_cancel_purge_async (jobs[i].id,
+                             job_purge,
+                             cancellable,
+                             user_data);
+   }
+}
+
+void
 job_cancel_purge_async (gint          job_id,
                         gboolean      job_purge,
                         GCancellable *cancellable,
-                        JCPCallback   callback,
                         gpointer      user_data)
 {
   GDBusConnection *bus;
@@ -3879,14 +3894,12 @@ job_cancel_purge_async (gint          job_id,
     {
       g_warning ("Failed to get session bus: %s", error->message);
       g_error_free (error);
-      callback (user_data);
       return;
     }
 
   data = g_new0 (JCPData, 1);
   if (cancellable)
     data->cancellable = g_object_ref (cancellable);
-  data->callback = callback;
   data->user_data = user_data;
 
   g_dbus_connection_call (bus,
@@ -3908,7 +3921,6 @@ job_cancel_purge_async (gint          job_id,
 typedef struct
 {
   GCancellable *cancellable;
-  JSHUCallback  callback;
   gpointer      user_data;
 } JSHUData;
 
@@ -3937,8 +3949,6 @@ job_set_hold_until_async_dbus_cb (GObject      *source_object,
       g_error_free (error);
     }
 
-  data->callback (data->user_data);
-
   if (data->cancellable)
     g_object_unref (data->cancellable);
   g_free (data);
@@ -3948,7 +3958,6 @@ void
 job_set_hold_until_async (gint          job_id,
                           const gchar  *job_hold_until,
                           GCancellable *cancellable,
-                          JSHUCallback  callback,
                           gpointer      user_data)
 {
   GDBusConnection *bus;
@@ -3960,14 +3969,12 @@ job_set_hold_until_async (gint          job_id,
     {
       g_warning ("Failed to get session bus: %s", error->message);
       g_error_free (error);
-      callback (user_data);
       return;
     }
 
   data = g_new0 (JSHUData, 1);
   if (cancellable)
     data->cancellable = g_object_ref (cancellable);
-  data->callback = callback;
   data->user_data = user_data;
 
   g_dbus_connection_call (bus,

@@ -264,15 +264,19 @@ typedef void (*JCPCallback) (gpointer user_data);
 void job_cancel_purge_async (gint          job_id,
                              gboolean      job_purge,
                              GCancellable *cancellable,
-                             JCPCallback   callback,
                              gpointer      user_data);
+
+void job_cancel_purge_all (cups_job_t   *jobs,
+                           gint          num_of_jobs,
+                           gboolean      job_purge,
+                           GCancellable *cancellable,
+                           gpointer      user_data);
 
 typedef void (*JSHUCallback) (gpointer user_data);
 
 void job_set_hold_until_async (gint          job_id,
                                const gchar  *job_hold_until,
                                GCancellable *cancellable,
-                               JSHUCallback  callback,
                                gpointer      user_data);
 
 void         pp_devices_list_free (PpDevicesList *result);
