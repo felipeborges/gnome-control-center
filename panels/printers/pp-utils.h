@@ -267,6 +267,13 @@ void job_cancel_purge_async (gint          job_id,
                              JCPCallback   callback,
                              gpointer      user_data);
 
+void job_cancel_purge_all_async (cups_job_t   *jobs,
+                                 gint          num_of_jobs,
+                                 gboolean      job_purge,
+                                 GCancellable *cancellable,
+                                 JCPCallback   callback,
+                                 gpointer      user_data);
+
 typedef void (*JSHUCallback) (gpointer user_data);
 
 void job_set_hold_until_async (gint          job_id,

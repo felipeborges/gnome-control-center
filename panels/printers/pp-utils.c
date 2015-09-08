@@ -3864,6 +3864,26 @@ job_cancel_purge_async_dbus_cb (GObject      *source_object,
 }
 
 void
+job_cancel_purge_all_async (cups_job_t   *jobs,
+                            gint          num_of_jobs,
+                            gboolean      job_purge,
+                            GCancellable *cancellable,
+                            JCPCallback   callback,
+                            gpointer      user_data)
+{
+  gint i;
+
+  for (i = 0; i < num_of_jobs; i++)
+   {
+     job_cancel_purge_async (jobs[i].id,
+                             job_purge,
+                             cancellable,
+                             callback,
+                             user_data);
+   }
+}
+
+void
 job_cancel_purge_async (gint          job_id,
                         gboolean      job_purge,
                         GCancellable *cancellable,
