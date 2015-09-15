@@ -38,6 +38,7 @@
 #include "pp-jobs-dialog.h"
 #include "pp-utils.h"
 #include "pp-maintenance-command.h"
+#include "pp-cups.h"
 
 CC_PANEL_REGISTER (CcPrintersPanel, cc_printers_panel)
 
@@ -1040,8 +1041,11 @@ printer_selection_changed_cb (GtkTreeSelection *selection,
 }
 
 static void
-actualize_printers_list (CcPrintersPanel *self)
+actualize_printers_list_cb (GObject      *source_object,
+                            GAsyncResult *res,
+                            gpointer      user_data)
 {
+  CcPrintersPanel        *self = (CcPrintersPanel*) user_data;
   CcPrintersPanelPrivate *priv;
   GtkTreeSelection       *selection;
   GtkListStore           *store;
@@ -1064,6 +1068,9 @@ actualize_printers_list (CcPrintersPanel *self)
   int                     current_dest = -1;
   int                     i, j;
   int                     num_jobs = 0;
+  PpCups                 *cups = (PpCups *) source_object;
+  PpCupsDests            *cups_dests;
+  GError                 *error = NULL;
 
   priv = PRINTERS_PANEL_PRIVATE (self);
 
@@ -1087,7 +1094,9 @@ actualize_printers_list (CcPrintersPanel *self)
     }
 
   free_dests (self);
-  priv->num_dests = cupsGetDests (&priv->dests);
+  cups_dests = pp_cups_get_dests_finish (cups, res, &error);
+  priv->dests = cups_dests->dests;
+  priv->num_dests = cups_dests->num_of_dests;
   priv->dest_model_names = g_new0 (gchar *, priv->num_dests);
   priv->ppd_file_names = g_new0 (gchar *, priv->num_dests);
 
@@ -1294,6 +1303,15 @@ actualize_printers_list (CcPrintersPanel *self)
   g_object_unref (store);
 
   update_sensitivity (self);
+}
+
+static void
+actualize_printers_list (CcPrintersPanel *self)
+{
+  PpCups *cups;
+
+  cups = pp_cups_new ();
+  pp_cups_get_dests_async (cups, NULL, actualize_printers_list_cb, self);
 }
 
 static void
