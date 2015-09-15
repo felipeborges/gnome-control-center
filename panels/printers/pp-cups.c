@@ -59,7 +59,7 @@ _pp_cups_get_dests_thread (GTask              *task,
   dests = g_slice_new (PpCupsDests);
   dests->num_of_dests = cupsGetDests (&dests->dests);
 
-  if (dests->num_of_dests)
+  if (dests->num_of_dests > 0)
     g_task_return_pointer (task, dests, g_object_unref);
   else
     g_task_return_error (task, error);

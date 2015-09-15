@@ -38,6 +38,7 @@
 #include "pp-jobs-dialog.h"
 #include "pp-utils.h"
 #include "pp-maintenance-command.h"
+#include "pp-cups.h"
 
 CC_PANEL_REGISTER (CcPrintersPanel, cc_printers_panel)
 
@@ -71,6 +72,7 @@ struct _CcPrintersPanelPrivate
 {
   GtkBuilder *builder;
 
+  PpCups *cups;
   cups_dest_t *dests;
   gchar **dest_model_names;
   gchar **ppd_file_names;
@@ -119,7 +121,7 @@ typedef struct
 } SetPPDItem;
 
 static void update_jobs_count (CcPrintersPanel *self);
-static void actualize_printers_list (CcPrintersPanel *self);
+static void actualize_printers_list (GObject *source_object, GAsyncResult *res, gpointer user_data);
 static void update_sensitivity (gpointer user_data);
 static void printer_disable_cb (GObject *gobject, GParamSpec *pspec, gpointer user_data);
 static void printer_set_default_cb (GtkToggleButton *button, gpointer user_data);
@@ -337,7 +339,7 @@ on_cups_notification (GDBusConnection *connection,
       g_strcmp0 (signal_name, "PrinterDeleted") == 0 ||
       g_strcmp0 (signal_name, "PrinterStateChanged") == 0 ||
       g_strcmp0 (signal_name, "PrinterStopped") == 0)
-    actualize_printers_list (self);
+    pp_cups_get_dests_async (priv->cups, NULL, actualize_printers_list, self);
   else if (g_strcmp0 (signal_name, "JobCreated") == 0 ||
            g_strcmp0 (signal_name, "JobCompleted") == 0)
     {
@@ -1040,8 +1042,11 @@ printer_selection_changed_cb (GtkTreeSelection *selection,
 }
 
 static void
-actualize_printers_list (CcPrintersPanel *self)
+actualize_printers_list (GObject      *source_object,
+			 GAsyncResult *res,
+			 gpointer      user_data)
 {
+  CcPrintersPanel        *self = (CcPrintersPanel*) user_data;
   CcPrintersPanelPrivate *priv;
   GtkTreeSelection       *selection;
   GtkListStore           *store;
@@ -1064,6 +1069,9 @@ actualize_printers_list (CcPrintersPanel *self)
   int                     current_dest = -1;
   int                     i, j;
   int                     num_jobs = 0;
+  PpCups 		 *cups = (PpCups *) source_object;
+  PpCupsDests            *cups_dests;
+  GError                 *error = NULL;
 
   priv = PRINTERS_PANEL_PRIVATE (self);
 
@@ -1087,7 +1095,9 @@ actualize_printers_list (CcPrintersPanel *self)
     }
 
   free_dests (self);
-  priv->num_dests = cupsGetDests (&priv->dests);
+  cups_dests = pp_cups_get_dests_finish (cups, res, &error);
+  priv->dests = cups_dests->dests;
+  priv->num_dests = cups_dests->num_of_dests;
   priv->dest_model_names = g_new0 (gchar *, priv->num_dests);
   priv->ppd_file_names = g_new0 (gchar *, priv->num_dests);
 
@@ -1357,7 +1367,7 @@ populate_printers_list (CcPrintersPanel *self)
   g_signal_connect (gtk_tree_view_get_selection (GTK_TREE_VIEW (treeview)),
                     "changed", G_CALLBACK (printer_selection_changed_cb), self);
 
-  actualize_printers_list (self);
+  pp_cups_get_dests_async (priv->cups, NULL, actualize_printers_list, self);
 
 
   icon_renderer = gtk_cell_renderer_pixbuf_new ();
@@ -1496,7 +1506,7 @@ printer_disable_cb (GObject    *gobject,
             printer_set_accepting_jobs (name, TRUE, NULL);
         }
 
-      actualize_printers_list (self);
+      pp_cups_get_dests_async (priv->cups, NULL, actualize_printers_list, self);
     }
 }
 
@@ -1711,7 +1721,7 @@ printer_set_default_cb (GtkToggleButton *button,
   if (name)
     {
       printer_set_default (name);
-      actualize_printers_list (self);
+      pp_cups_get_dests_async (priv->cups, NULL, actualize_printers_list, self);
 
       g_signal_handlers_block_by_func (G_OBJECT (button), printer_set_default_cb, self);
       gtk_toggle_button_set_active (button, priv->dests[priv->current_dest].is_default);
@@ -1738,7 +1748,7 @@ new_printer_dialog_pre_response_cb (PpNewPrinterDialog *dialog,
   priv->new_printer_on_network = is_network_device;
   priv->select_new_printer = TRUE;
 
-  actualize_printers_list (self);
+  pp_cups_get_dests_async (priv->cups, NULL, actualize_printers_list, self);
 }
 
 static void
@@ -1775,7 +1785,7 @@ new_printer_dialog_response_cb (PpNewPrinterDialog *dialog,
       gtk_widget_show (message_dialog);
     }
 
-  actualize_printers_list (self);
+  pp_cups_get_dests_async (priv->cups, NULL, actualize_printers_list, self);
 }
 
 static void
@@ -1820,7 +1830,7 @@ printer_remove_cb (GtkToolButton *toolbutton,
     printer_name = priv->dests[priv->current_dest].name;
 
   if (printer_name && printer_delete (printer_name))
-    actualize_printers_list (self);
+    pp_cups_get_dests_async (priv->cups, NULL, actualize_printers_list, self);
 }
 
 static void
@@ -1857,7 +1867,7 @@ printer_name_edit_cb (GtkWidget *entry,
           }
     }
 
-  actualize_printers_list (self);
+  pp_cups_get_dests_async (priv->cups, NULL, actualize_printers_list, self);
 }
 
 static void
@@ -1880,7 +1890,7 @@ printer_location_edit_cb (GtkWidget *entry,
 
   if (printer_name && location &&
       printer_set_location (printer_name, location))
-    actualize_printers_list (self);
+    pp_cups_get_dests_async (priv->cups, NULL, actualize_printers_list, self);
 }
 
 static void
@@ -1914,7 +1924,7 @@ set_ppd_cb (gchar    *printer_name,
 
   if (success)
     {
-      actualize_printers_list (self);
+      pp_cups_get_dests_async (priv->cups, NULL, actualize_printers_list, self);
     }
 
   g_free (printer_name);
@@ -2723,7 +2733,7 @@ printer_options_response_cb (GtkDialog *dialog,
   update_sensitivity (self);
 
   if (response_id == GTK_RESPONSE_OK)
-    actualize_printers_list (self);
+    pp_cups_get_dests_async (priv->cups, NULL, actualize_printers_list, self);
 }
 
 static void
@@ -2774,7 +2784,7 @@ cups_status_check (gpointer user_data)
   if (http)
     {
       httpClose (http);
-      actualize_printers_list (self);
+      pp_cups_get_dests_async (priv->cups, NULL, actualize_printers_list, self);
       attach_to_cups_notifier (self);
       priv->cups_status_check_id = 0;
       result = FALSE;
@@ -2898,6 +2908,7 @@ cc_printers_panel_init (CcPrintersPanel *self)
 
   /* initialize main data structure */
   priv->builder = gtk_builder_new ();
+  priv->cups = pp_cups_new ();
   priv->dests = NULL;
   priv->dest_model_names = NULL;
   priv->ppd_file_names = NULL;
