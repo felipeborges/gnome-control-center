@@ -7,6 +7,7 @@ AM_CPPFLAGS = 						\
 	$(SMBCLIENT_CFLAGS)				\
 	-I$(top_srcdir)/shell/				\
 	-DGNOMELOCALEDIR="\"$(datadir)/locale\""	\
+	-I$(top_srcdir)/libgd/				\
 	$(NULL)
 
 noinst_LTLIBRARIES = libprinters.la
@@ -49,7 +50,12 @@ libprinters_la_SOURCES =		\
 	cc-printers-panel.h
 
 libprinters_la_CPPFLAGS = $(AM_CPPFLAGS)
-libprinters_la_LIBADD = $(PRINTERS_PANEL_LIBS) $(PANEL_LIBS) $(CUPS_LIBS) $(SMBCLIENT_LIBS)
+libprinters_la_LIBADD = \
+	$(PRINTERS_PANEL_LIBS) \
+	$(PANEL_LIBS) \
+	$(CUPS_LIBS) \
+	$(SMBCLIENT_LIBS) \
+	$(top_builddir)/libgd/libgd.la
 
 resource_files = $(shell glib-compile-resources --sourcedir=$(srcdir) --generate-dependencies $(srcdir)/printers.gresource.xml)
 cc-printers-resources.c: printers.gresource.xml $(resource_files)

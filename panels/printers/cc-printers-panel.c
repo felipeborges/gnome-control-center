@@ -40,6 +40,8 @@
 #include "pp-maintenance-command.h"
 #include "pp-cups.h"
 
+#include <libgd/gd-notification.h>
+
 CC_PANEL_REGISTER (CcPrintersPanel, cc_printers_panel)
 
 #define PRINTERS_PANEL_PRIVATE(o) \
@@ -104,6 +106,9 @@ struct _CcPrintersPanelPrivate
   PPDList      *all_ppds_list;
   GHashTable   *preferred_drivers;
   GCancellable *get_all_ppds_cancellable;
+
+  GtkWidget *overlay;
+  GtkWidget *notification;
 
   gchar    *new_printer_name;
   gchar    *new_printer_location;
@@ -1436,6 +1441,38 @@ set_pixbuf_cell_sensitivity_func (GtkTreeViewColumn *tree_column,
 }
 
 static void
+show_loading_notification (CcPrintersPanel *self)
+{
+	CcPrintersPanelPrivate *priv;
+	GtkWidget *box;
+	GtkWidget *label;
+
+	priv = PRINTERS_PANEL_PRIVATE (self);
+
+	if (priv->notification)
+	 return;
+
+	priv->notification = gd_notification_new ();
+	g_object_add_weak_pointer (G_OBJECT (priv->notification),
+                             (gpointer *)&priv->notification);
+	box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 6);
+	gtk_widget_set_margin_start (box, 6);
+	gtk_widget_set_margin_end (box, 6);
+	gtk_widget_set_margin_top (box, 6);
+	gtk_widget_set_margin_bottom (box, 6);
+	label = gtk_label_new (_("Loading printing server..."));
+	gtk_label_set_line_wrap (GTK_LABEL (label), TRUE);
+	gtk_label_set_max_width_chars (GTK_LABEL (label), 30);
+	g_object_set (G_OBJECT (label), "xalign", 0, NULL);
+	gtk_box_pack_start (GTK_BOX (box), label, FALSE, FALSE, 0);
+	gtk_widget_show_all (box);
+
+	gtk_container_add (GTK_CONTAINER (priv->notification), box);
+	gtk_overlay_add_overlay (GTK_OVERLAY (priv->overlay), priv->notification);
+	gtk_widget_show (priv->notification);
+}
+
+static void
 populate_printers_list (CcPrintersPanel *self)
 {
   CcPrintersPanelPrivate *priv;
@@ -1445,6 +1482,8 @@ populate_printers_list (CcPrintersPanel *self)
   GtkCellRenderer        *renderer;
   GtkWidget              *treeview;
   int                     icon_width;
+
+	show_loading_notification (self);
 
   priv = PRINTERS_PANEL_PRIVATE (self);
 
@@ -3059,7 +3098,7 @@ cc_printers_panel_init (CcPrintersPanel *self)
 
   /* add the top level widget */
   top_widget = (GtkWidget*)
-    gtk_builder_get_object (priv->builder, "main-vbox");
+    gtk_builder_get_object (priv->builder, "overlay");
 
   /* connect signals */
   widget = (GtkWidget*)
