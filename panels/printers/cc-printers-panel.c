@@ -387,11 +387,19 @@ on_cups_notification (GDBusConnection *connection,
     }
 }
 
-static gboolean
-renew_subscription (gpointer data)
+static void
+renew_subscription_cb (GObject      *source_object,
+                       GAsyncResult *res,
+                       gpointer      user_data)
 {
-  CcPrintersPanelPrivate *priv;
-  CcPrintersPanel        *self = (CcPrintersPanel*) data;
+  CcPrintersPanel              *self = (CcPrintersPanel*) user_data;
+  CcPrintersPanelPrivate       *priv;
+  ipp_attribute_t              *attr = NULL;
+  http_t                       *http;
+  ipp_t                        *request;
+  ipp_t                        *response = NULL;
+  gint                          result = -1;
+  GError                       *error = NULL;
   static const char * const events[] = {
           "printer-added",
           "printer-deleted",
@@ -402,10 +410,78 @@ renew_subscription (gpointer data)
 
   priv = PRINTERS_PANEL_PRIVATE (self);
 
-  priv->subscription_id = renew_cups_subscription (priv->subscription_id,
-                                                   events,
-                                                   G_N_ELEMENTS (events),
-                                                   SUBSCRIPTION_DURATION);
+  http = pp_http_connect_finish (source_object, res, &error);
+  if (!http) {
+    g_debug ("Connection to CUPS server \'%s\' failed.", cupsServer ());
+  }
+  else {
+    if (priv->subscription_id >= 0) {
+      request = ippNewRequest (IPP_RENEW_SUBSCRIPTION);
+      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_URI,
+                   "printer-uri", NULL, "/");
+      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_NAME,
+                   "requesting-user-name", NULL, cupsUser ());
+      ippAddInteger (request, IPP_TAG_OPERATION, IPP_TAG_INTEGER,
+                    "notify-subscription-id", priv->subscription_id);
+      ippAddInteger (request, IPP_TAG_SUBSCRIPTION, IPP_TAG_INTEGER,
+                    "notify-lease-duration", SUBSCRIPTION_DURATION);
+      response = cupsDoRequest (http, request, "/");
+      if (response != NULL &&
+          ippGetStatusCode (response) <= IPP_OK_CONFLICT) {
+        if ((attr = ippFindAttribute (response, "notify-lease-duration",
+                                      IPP_TAG_INTEGER)) == NULL)
+          g_debug ("No notify-lease-duration in response!\n");
+        else
+          if (ippGetInteger (attr, 0) == SUBSCRIPTION_DURATION)
+            result = priv->subscription_id;
+      }
+    }
+
+    if (result < 0) {
+      request = ippNewRequest (IPP_CREATE_PRINTER_SUBSCRIPTION);
+      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_URI,
+                    "printer-uri", NULL, "/");
+      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_NAME,
+                    "requesting-user-name", NULL, cupsUser ());
+      ippAddStrings (request, IPP_TAG_SUBSCRIPTION, IPP_TAG_KEYWORD,
+                     "notify-events", G_N_ELEMENTS (events), NULL, events);
+      ippAddString (request, IPP_TAG_SUBSCRIPTION, IPP_TAG_KEYWORD,
+                    "notify-pull-method", NULL, "ippget");
+      ippAddString (request, IPP_TAG_SUBSCRIPTION, IPP_TAG_URI,
+                    "notify-recipient-uri", NULL, "dbus://");
+      ippAddInteger (request, IPP_TAG_SUBSCRIPTION, IPP_TAG_INTEGER,
+                     "notify-lease-duration", SUBSCRIPTION_DURATION);
+      response = cupsDoRequest (http, request, "/");
+
+      if (response != NULL &&
+          ippGetStatusCode (response) <= IPP_OK_CONFLICT) {
+        if ((attr = ippFindAttribute (response, "notify-subscription-id",
+                                      IPP_TAG_INTEGER)) == NULL)
+          g_debug ("No notify-subscription-id in response!\n");
+        else
+          result = ippGetInteger (attr, 0);
+      }
+    }
+
+    if (response)
+      ippDelete (response);
+
+    httpClose (http);
+  }
+
+  priv->subscription_id = result;
+}
+
+static gboolean
+renew_subscription (gpointer data)
+{
+  CcPrintersPanelPrivate *priv;
+  CcPrintersPanel        *self = (CcPrintersPanel*) data;
+
+  priv = PRINTERS_PANEL_PRIVATE (self);
+
+  pp_http_connect_encrypt_async (cupsServer (), ippPort (), cupsEncryption (), NULL,
+				 renew_subscription_cb, self);
 
   if (priv->subscription_id > 0)
     return TRUE;
@@ -1042,6 +1118,25 @@ printer_selection_changed_cb (GtkTreeSelection *selection,
 }
 
 static void
+actualize_printers_list_cb (GObject      *source_object,
+			    GAsyncResult *res,
+			    gpointer      user_data)
+{
+  GtkWidget *widget = GTK_WIDGET(user_data);
+  http_t *http;
+  GError *error = NULL;
+
+  http = pp_http_connect_finish (source_object, res, &error);
+  if (http)
+  {
+    httpClose (http);
+    gtk_notebook_set_current_page (GTK_NOTEBOOK (widget), NOTEBOOK_NO_PRINTERS_PAGE);
+  }
+  else
+    gtk_notebook_set_current_page (GTK_NOTEBOOK (widget), NOTEBOOK_NO_CUPS_PAGE);
+}
+
+static void
 actualize_printers_list (GObject      *source_object,
 			 GAsyncResult *res,
 			 gpointer      user_data)
@@ -1060,7 +1155,6 @@ actualize_printers_list (GObject      *source_object,
   gboolean                paused = FALSE;
   gboolean                selected_iter_set = FALSE;
   gboolean                valid = FALSE;
-  http_t                 *http;
   gchar                  *current_printer_name = NULL;
   gchar                  *printer_icon_name = NULL;
   gchar                  *default_icon_name = NULL;
@@ -1069,7 +1163,6 @@ actualize_printers_list (GObject      *source_object,
   int                     current_dest = -1;
   int                     i, j;
   int                     num_jobs = 0;
-  PpCups 		 *cups = (PpCups *) source_object;
   PpCupsDests            *cups_dests;
   GError                 *error = NULL;
 
@@ -1095,7 +1188,7 @@ actualize_printers_list (GObject      *source_object,
     }
 
   free_dests (self);
-  cups_dests = pp_cups_get_dests_finish (cups, res, &error);
+  cups_dests = pp_cups_get_dests_finish (priv->cups, res, &error);
   priv->dests = cups_dests->dests;
   priv->num_dests = cups_dests->num_of_dests;
   priv->dest_model_names = g_new0 (gchar *, priv->num_dests);
@@ -1113,14 +1206,8 @@ actualize_printers_list (GObject      *source_object,
       widget = (GtkWidget*)
         gtk_builder_get_object (priv->builder, "notebook");
 
-      http = httpConnectEncrypt (cupsServer (), ippPort (), cupsEncryption ());
-      if (http)
-        {
-          httpClose (http);
-          gtk_notebook_set_current_page (GTK_NOTEBOOK (widget), NOTEBOOK_NO_PRINTERS_PAGE);
-        }
-      else
-        gtk_notebook_set_current_page (GTK_NOTEBOOK (widget), NOTEBOOK_NO_CUPS_PAGE);
+      pp_http_connect_encrypt_async (cupsServer (), ippPort (), cupsEncryption (), NULL,
+                                     actualize_printers_list_cb, widget);
 
       gtk_list_store_append (store, &iter);
       gtk_list_store_set (store, &iter,
@@ -2770,27 +2857,43 @@ printer_options_cb (GtkToolButton *toolbutton,
     }
 }
 
+static void
+cups_status_check_cb (GObject      *source_object,
+		      GAsyncResult *res,
+		      gpointer      user_data)
+{
+  CcPrintersPanel *self = (CcPrintersPanel*) user_data;
+  CcPrintersPanelPrivate *priv;
+  http_t *http;
+  GError *error = NULL;
+
+  priv = PRINTERS_PANEL_PRIVATE (self);
+
+  http = pp_http_connect_finish (source_object, res, &error);
+  if (http)
+  {
+    httpClose (http);
+    pp_cups_get_dests_async (priv->cups, NULL, actualize_printers_list, self);
+    attach_to_cups_notifier (self);
+    priv->cups_status_check_id = 0;
+  }
+}
+
 static gboolean
 cups_status_check (gpointer user_data)
 {
-  CcPrintersPanelPrivate  *priv;
+  CcPrintersPanelPrivate *priv;
   CcPrintersPanel         *self = (CcPrintersPanel*) user_data;
-  gboolean                 result = TRUE;
-  http_t                  *http;
 
-  priv = self->priv = PRINTERS_PANEL_PRIVATE (self);
+  priv = PRINTERS_PANEL_PRIVATE (self);
 
-  http = httpConnectEncrypt (cupsServer (), ippPort (), cupsEncryption ());
-  if (http)
-    {
-      httpClose (http);
-      pp_cups_get_dests_async (priv->cups, NULL, actualize_printers_list, self);
-      attach_to_cups_notifier (self);
-      priv->cups_status_check_id = 0;
-      result = FALSE;
-    }
+  pp_http_connect_encrypt_async (cupsServer (), ippPort (), cupsEncryption (), NULL,
+                                 cups_status_check_cb, self);
 
-  return result;
+  if (priv->cups_status_check_id > 0)
+    return FALSE;
+
+  return TRUE;
 }
 
 static void
@@ -2898,7 +3001,6 @@ cc_printers_panel_init (CcPrintersPanel *self)
   GtkWidget              *top_widget;
   GtkWidget              *widget;
   GError                 *error = NULL;
-  http_t                 *http;
   gchar                  *objects[] = { "main-vbox", NULL };
   GtkStyleContext        *context;
   guint                   builder_result;
@@ -3061,14 +3163,9 @@ Please check your installation");
                       get_all_ppds_async_cb,
                       self);
 
-  http = httpConnectEncrypt (cupsServer (), ippPort (), cupsEncryption ());
-  if (!http)
-    {
-      priv->cups_status_check_id =
-        g_timeout_add_seconds (CUPS_STATUS_CHECK_INTERVAL, cups_status_check, self);
-    }
-  else
-    httpClose (http);
+  if (cups_status_check (self))
+    priv->cups_status_check_id =
+      g_timeout_add_seconds (CUPS_STATUS_CHECK_INTERVAL, cups_status_check, self);
 
   gtk_container_add (GTK_CONTAINER (self), top_widget);
   gtk_widget_show_all (GTK_WIDGET (self));

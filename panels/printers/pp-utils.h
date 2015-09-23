@@ -95,12 +95,22 @@ char       *get_dest_attr (const char *dest_name,
 gchar      *get_ppd_attribute (const gchar *ppd_file_name,
                                const gchar *attribute_name);
 
+void       pp_http_connect_encrypt_async (const gchar         *hostname,
+                                          int                  port,
+                                          http_encryption_t    use_encryption,
+                                          GCancellable        *cancellable,
+                                          GAsyncReadyCallback  callback,
+                                          gpointer             user_data);
+
+http_t     *pp_http_connect_finish (GObject       *source_object,
+                                    GAsyncResult  *result,
+                                    GError       **error);
+
 void        cancel_cups_subscription (gint id);
 
-gint        renew_cups_subscription (gint id,
-                                     const char * const *events,
-                                     gint num_events,
-                                     gint lease_duration);
+void        renew_cups_subscription (GObject      *source_object,
+                                     GAsyncResult *res,
+                                     gpointer      user_data);
 
 void        set_local_default_printer (const gchar *printer_name);
 

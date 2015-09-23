@@ -226,12 +226,80 @@ get_ppd_attribute (const gchar *ppd_file_name,
   return result;
 }
 
-/* Cancels subscription of given id */
+/* Cups httpConnectEncrypt async */
+typedef struct
+{
+  const gchar *hostname;
+  int port;
+  http_encryption_t use_encryption;
+} HttpConnectData;
+
+static void
+http_connect_free (HttpConnectData *data)
+{
+  g_slice_free (HttpConnectData, data);
+}
+
+static void
+http_connect_encrypt_thread (GTask        *task,
+                             gpointer      source_object,
+                             gpointer      task_data,
+                             GCancellable *cancellable)
+{
+  HttpConnectData *data = task_data;
+  http_t *connection;
+
+  connection = httpConnectEncrypt (data->hostname, data->port, data->use_encryption);
+
+  if (connection)
+    g_task_return_pointer (task, connection, g_object_unref);
+  else
+    g_task_return_new_error (task,
+                             G_IO_ERROR,
+                             G_IO_ERROR_TIMED_OUT,
+                             "httpConnectEncrypt failed");
+}
+
 void
-cancel_cups_subscription (gint id)
+pp_http_connect_encrypt_async (const gchar         *hostname,
+                               int                  port,
+                               http_encryption_t    use_encryption,
+                               GCancellable        *cancellable,
+                               GAsyncReadyCallback  callback,
+                               gpointer             user_data)
+{
+  HttpConnectData *data;
+  GTask *task;
+
+  data = g_slice_new (HttpConnectData);
+  data->hostname = hostname;
+  data->port = port;
+  data->use_encryption = use_encryption;
+
+  task = g_task_new (NULL, cancellable, callback, user_data);
+  g_task_set_task_data (task, data, (GDestroyNotify) http_connect_free);
+  g_task_run_in_thread (task, http_connect_encrypt_thread);
+}
+
+http_t *
+pp_http_connect_finish (GObject      *source_object,
+                        GAsyncResult *result,
+                        GError      **error)
+{
+  g_return_val_if_fail (g_task_is_valid (result, source_object), NULL);
+
+  return g_task_propagate_pointer (G_TASK (result), error);
+}
+
+/* Cancels subscription of given id */
+static void
+cancel_cups_subscription_cb (GObject      *source_object,
+                             GAsyncResult *res,
+                             gpointer      user_data)
 {
   http_t *http;
   ipp_t  *request;
+  gint id = (gint) (intptr_t) user_data;
 
   if (id >= 0 &&
       ((http = httpConnectEncrypt (cupsServer (), ippPort (),
@@ -248,79 +316,11 @@ cancel_cups_subscription (gint id)
   }
 }
 
-/* Returns id of renewed subscription or new id */
-gint
-renew_cups_subscription (gint id,
-                         const char * const *events,
-                         gint num_events,
-                         gint lease_duration)
+void
+cancel_cups_subscription (gint id)
 {
-  ipp_attribute_t              *attr = NULL;
-  http_t                       *http;
-  ipp_t                        *request;
-  ipp_t                        *response = NULL;
-  gint                          result = -1;
-
-  if ((http = httpConnectEncrypt (cupsServer (), ippPort (),
-                                  cupsEncryption ())) == NULL) {
-    g_debug ("Connection to CUPS server \'%s\' failed.", cupsServer ());
-  }
-  else {
-    if (id >= 0) {
-      request = ippNewRequest (IPP_RENEW_SUBSCRIPTION);
-      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_URI,
-                   "printer-uri", NULL, "/");
-      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_NAME,
-                   "requesting-user-name", NULL, cupsUser ());
-      ippAddInteger (request, IPP_TAG_OPERATION, IPP_TAG_INTEGER,
-                    "notify-subscription-id", id);
-      ippAddInteger (request, IPP_TAG_SUBSCRIPTION, IPP_TAG_INTEGER,
-                    "notify-lease-duration", lease_duration);
-      response = cupsDoRequest (http, request, "/");
-      if (response != NULL &&
-          ippGetStatusCode (response) <= IPP_OK_CONFLICT) {
-        if ((attr = ippFindAttribute (response, "notify-lease-duration",
-                                      IPP_TAG_INTEGER)) == NULL)
-          g_debug ("No notify-lease-duration in response!\n");
-        else
-          if (ippGetInteger (attr, 0) == lease_duration)
-            result = id;
-      }
-    }
-
-    if (result < 0) {
-      request = ippNewRequest (IPP_CREATE_PRINTER_SUBSCRIPTION);
-      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_URI,
-                    "printer-uri", NULL, "/");
-      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_NAME,
-                    "requesting-user-name", NULL, cupsUser ());
-      ippAddStrings (request, IPP_TAG_SUBSCRIPTION, IPP_TAG_KEYWORD,
-                     "notify-events", num_events, NULL, events);
-      ippAddString (request, IPP_TAG_SUBSCRIPTION, IPP_TAG_KEYWORD,
-                    "notify-pull-method", NULL, "ippget");
-      ippAddString (request, IPP_TAG_SUBSCRIPTION, IPP_TAG_URI,
-                    "notify-recipient-uri", NULL, "dbus://");
-      ippAddInteger (request, IPP_TAG_SUBSCRIPTION, IPP_TAG_INTEGER,
-                     "notify-lease-duration", lease_duration);
-      response = cupsDoRequest (http, request, "/");
-
-      if (response != NULL &&
-          ippGetStatusCode (response) <= IPP_OK_CONFLICT) {
-        if ((attr = ippFindAttribute (response, "notify-subscription-id",
-                                      IPP_TAG_INTEGER)) == NULL)
-          g_debug ("No notify-subscription-id in response!\n");
-        else
-          result = ippGetInteger (attr, 0);
-      }
-    }
-
-    if (response)
-      ippDelete (response);
-
-    httpClose (http);
-  }
-
-  return result;
+  pp_http_connect_encrypt_async (cupsServer (), ippPort (), cupsEncryption (),
+                                 NULL, cancel_cups_subscription_cb, &id);
 }
 
 /*  Set default destination in ~/.cups/lpoptions.
