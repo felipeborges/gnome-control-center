@@ -249,7 +249,7 @@ http_connect_encrypt_thread (GTask        *task,
   HttpConnectData *data = task_data;
   http_t *connection;
 
-  connection = httpConnectEncrypt (data->hostname, data->port, data->use_encryption);
+  connection = httpConnect2 (data->hostname, data->port, NULL, AF_UNSPEC, data->use_encryption, 0, 30000, NULL);
 
   if (connection)
     g_task_return_pointer (task, connection, g_object_unref);
@@ -257,7 +257,7 @@ http_connect_encrypt_thread (GTask        *task,
     g_task_return_new_error (task,
                              G_IO_ERROR,
                              G_IO_ERROR_TIMED_OUT,
-                             "httpConnectEncrypt failed");
+                             "httpConnect2 failed");
 }
 
 void
