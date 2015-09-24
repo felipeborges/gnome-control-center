@@ -100,3 +100,48 @@ pp_cups_get_dests_finish (PpCups        *cups,
 
   return g_task_propagate_pointer (G_TASK (result), error);
 }
+
+void
+pp_cups_connection_test_async (PpCups              *cups,
+                               GAsyncReadyCallback  callback,
+                               gpointer             user_data)
+{
+  GSocketClient *client;
+  gchar         *address;
+  int            port = ippPort ();
+
+  address = g_strdup_printf ("%s:%d", cupsServer (), port);
+
+  client = g_socket_client_new ();
+  g_socket_client_connect_to_host_async (client,
+                                         address,
+                                         port,
+                                         NULL,
+                                         callback,
+                                         user_data);
+
+  g_object_unref (client);
+  g_free (address);
+}
+
+gboolean
+pp_cups_connection_test_finish (GObject      *source_object,
+                                GAsyncResult *result,
+                                gpointer      user_data)
+{
+  GSocketConnection *connection;
+  GError            *error = NULL;
+
+  connection = g_socket_client_connect_to_host_finish (G_SOCKET_CLIENT (source_object),
+                                                       result, &error);
+
+  if (connection)
+  {
+    g_io_stream_close (G_IO_STREAM (connection), NULL, NULL);
+    g_object_unref (connection);
+
+    return TRUE;
+  }
+
+  return FALSE;
+}

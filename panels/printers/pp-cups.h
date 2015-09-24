@@ -52,18 +52,26 @@ struct _PpCupsClass
   GObjectClass parent_class;
 };
 
-GType        pp_cups_get_type         (void) G_GNUC_CONST;
+GType        pp_cups_get_type               (void) G_GNUC_CONST;
 
-PpCups      *pp_cups_new              (void);
+PpCups      *pp_cups_new                    (void);
 
-void         pp_cups_get_dests_async  (PpCups               *cups,
-                                       GCancellable         *cancellable,
-                                       GAsyncReadyCallback   callback,
-                                       gpointer              user_data);
+void         pp_cups_get_dests_async        (PpCups               *cups,
+                                             GCancellable         *cancellable,
+                                             GAsyncReadyCallback   callback,
+                                             gpointer              user_data);
 
-PpCupsDests *pp_cups_get_dests_finish (PpCups               *cups,
-                                       GAsyncResult         *result,
-                                       GError              **error);
+PpCupsDests *pp_cups_get_dests_finish       (PpCups               *cups,
+                                             GAsyncResult         *result,
+                                             GError              **error);
+
+void         pp_cups_connection_test_async  (PpCups               *cups,
+                                             GAsyncReadyCallback   callback,
+                                             gpointer              user_data);
+
+gboolean     pp_cups_connection_test_finish (GObject              *source_object,
+                                             GAsyncResult         *result,
+                                             gpointer              user_data);
 
 G_END_DECLS
 

@@ -1068,7 +1068,7 @@ actualize_printers_list_cb (GObject      *source_object,
   int                     current_dest = -1;
   int                     i, j;
   int                     num_jobs = 0;
-  PpCups                 *cups = (PpCups *) source_object;
+  PpCups                 *cups = PP_CUPS (source_object);
   PpCupsDests            *cups_dests;
   GError                 *error = NULL;
 
@@ -1097,6 +1097,7 @@ actualize_printers_list_cb (GObject      *source_object,
   cups_dests = pp_cups_get_dests_finish (cups, res, &error);
   priv->dests = cups_dests->dests;
   priv->num_dests = cups_dests->num_of_dests;
+  g_slice_free (PpCupsDests, cups_dests);
   priv->dest_model_names = g_new0 (gchar *, priv->num_dests);
   priv->ppd_file_names = g_new0 (gchar *, priv->num_dests);
 
@@ -2778,27 +2779,44 @@ printer_options_cb (GtkToolButton *toolbutton,
     }
 }
 
-static gboolean
-cups_status_check (gpointer user_data)
+static void
+cups_connection_check_cb (GObject      *source_object,
+                          GAsyncResult *res,
+                          gpointer      user_data)
 {
-  CcPrintersPanelPrivate  *priv;
-  CcPrintersPanel         *self = (CcPrintersPanel*) user_data;
-  gboolean                 result = TRUE;
-  http_t                  *http;
+  CcPrintersPanelPrivate *priv;
+  CcPrintersPanel        *self = (CcPrintersPanel*) user_data;
+  gboolean                success;
+  GError                 *error = NULL;
 
-  priv = self->priv = PRINTERS_PANEL_PRIVATE (self);
+  priv = PRINTERS_PANEL_PRIVATE (self);
 
-  http = httpConnectEncrypt (cupsServer (), ippPort (), cupsEncryption ());
-  if (http)
+  success = pp_cups_connection_test_finish (source_object, res, &error);
+  g_object_unref (source_object);
+
+  if (success)
     {
-      httpClose (http);
       actualize_printers_list (self);
       attach_to_cups_notifier (self);
       priv->cups_status_check_id = 0;
-      result = FALSE;
     }
+}
 
-  return result;
+static gboolean
+cups_connection_check (gpointer user_data)
+{
+  CcPrintersPanelPrivate *priv;
+  CcPrintersPanel        *self = (CcPrintersPanel*) user_data;
+  PpCups                 *cups;
+
+  priv = PRINTERS_PANEL_PRIVATE (self);
+  if (priv->cups_status_check_id == 0)
+    return G_SOURCE_REMOVE;
+
+  cups = pp_cups_new ();
+  pp_cups_connection_test_async (cups, cups_connection_check_cb, self);
+
+  return G_SOURCE_CONTINUE;
 }
 
 static void
@@ -2906,7 +2924,6 @@ cc_printers_panel_init (CcPrintersPanel *self)
   GtkWidget              *top_widget;
   GtkWidget              *widget;
   GError                 *error = NULL;
-  http_t                 *http;
   gchar                  *objects[] = { "main-vbox", NULL };
   GtkStyleContext        *context;
   guint                   builder_result;
@@ -3068,14 +3085,9 @@ Please check your installation");
                       get_all_ppds_async_cb,
                       self);
 
-  http = httpConnectEncrypt (cupsServer (), ippPort (), cupsEncryption ());
-  if (!http)
-    {
-      priv->cups_status_check_id =
-        g_timeout_add_seconds (CUPS_STATUS_CHECK_INTERVAL, cups_status_check, self);
-    }
-  else
-    httpClose (http);
+  priv->cups_status_check_id = g_timeout_add_seconds (CUPS_STATUS_CHECK_INTERVAL,
+                                                      cups_connection_check,
+                                                      self);
 
   gtk_container_add (GTK_CONTAINER (self), top_widget);
   gtk_widget_show_all (GTK_WIDGET (self));
