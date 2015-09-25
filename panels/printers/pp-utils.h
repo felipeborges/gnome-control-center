@@ -302,6 +302,8 @@ gchar      *canonicalize_device_name (GList         *device_names,
 
 void        shift_string_left (gchar *str);
 
+gboolean    is_address_local (const gchar *address);
+
 G_END_DECLS
 
 #endif /* __PP_UTILS_H */

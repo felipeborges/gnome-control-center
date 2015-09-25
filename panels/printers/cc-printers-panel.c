@@ -1041,6 +1041,21 @@ printer_selection_changed_cb (GtkTreeSelection *selection,
 }
 
 static void
+set_current_page (GObject      *source_object,
+                  GAsyncResult *res,
+                  gpointer      user_data)
+{
+  GtkWidget *notebook = GTK_WIDGET (user_data);
+  gboolean   success;
+
+  success = pp_cups_connection_test_finish (source_object, res, user_data);
+  if (success)
+    gtk_notebook_set_current_page (GTK_NOTEBOOK (notebook), NOTEBOOK_NO_PRINTERS_PAGE);
+  else
+    gtk_notebook_set_current_page (GTK_NOTEBOOK (notebook), NOTEBOOK_NO_CUPS_PAGE);
+}
+
+static void
 actualize_printers_list_cb (GObject      *source_object,
                             GAsyncResult *res,
                             gpointer      user_data)
@@ -1059,7 +1074,6 @@ actualize_printers_list_cb (GObject      *source_object,
   gboolean                paused = FALSE;
   gboolean                selected_iter_set = FALSE;
   gboolean                valid = FALSE;
-  http_t                 *http;
   gchar                  *current_printer_name = NULL;
   gchar                  *printer_icon_name = NULL;
   gchar                  *default_icon_name = NULL;
@@ -1113,14 +1127,7 @@ actualize_printers_list_cb (GObject      *source_object,
       widget = (GtkWidget*)
         gtk_builder_get_object (priv->builder, "notebook");
 
-      http = httpConnectEncrypt (cupsServer (), ippPort (), cupsEncryption ());
-      if (http)
-        {
-          httpClose (http);
-          gtk_notebook_set_current_page (GTK_NOTEBOOK (widget), NOTEBOOK_NO_PRINTERS_PAGE);
-        }
-      else
-        gtk_notebook_set_current_page (GTK_NOTEBOOK (widget), NOTEBOOK_NO_CUPS_PAGE);
+      pp_cups_connection_test_async (cups, set_current_page, widget);
 
       gtk_list_store_append (store, &iter);
       gtk_list_store_set (store, &iter,

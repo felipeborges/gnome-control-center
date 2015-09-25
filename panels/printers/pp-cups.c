@@ -112,6 +112,9 @@ pp_cups_connection_test_async (PpCups              *cups,
 
   address = g_strdup_printf ("%s:%d", cupsServer (), port);
 
+  if (is_address_local (address))
+    address = g_strdup_printf ("localhost:%d", port);
+
   client = g_socket_client_new ();
   g_socket_client_connect_to_host_async (client,
                                          address,

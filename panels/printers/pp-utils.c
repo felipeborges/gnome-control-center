@@ -4216,3 +4216,12 @@ shift_string_left (gchar *str)
       memmove (str, next, strlen (next) + 1);
     }
 }
+
+gboolean
+is_address_local (const gchar *address)
+{
+  return g_ascii_strncasecmp (address, "localhost", 9) == 0 ||
+         g_ascii_strncasecmp (address, "127.0.0.1", 9) == 0 ||
+         g_ascii_strncasecmp (address, "[::1]", 5) == 0 ||
+         address[0] == '/';
+}
