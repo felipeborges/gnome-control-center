@@ -271,6 +271,61 @@ cc_printers_panel_class_init (CcPrintersPanelClass *klass)
 }
 
 static void
+on_cups_notification_cb (GObject      *source_object,
+                         GAsyncResult *res,
+                         gpointer      user_data)
+{
+  CcPrintersPanel *self = user_data;
+  CcPrintersPanelPrivate *priv;
+  gchar  *job_uri;
+  ipp_t  *request, *response;
+  gboolean success;
+  gint job_id = 0; // need to get job_id
+  static const char * const requested_attrs[] = {
+    "job-printer-uri",
+    "job-originating-user-name"};
+
+  priv = PRINTERS_PANEL_PRIVATE (self);
+
+  success = pp_cups_connection_test_finish (source_object, res, NULL);
+  if (success)
+    {
+      job_uri = g_strdup_printf ("ipp://localhost/jobs/%d", job_id);
+      request = ippNewRequest (IPP_GET_JOB_ATTRIBUTES);
+      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_URI,
+                    "job-uri", NULL, job_uri);
+      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_NAME,
+                    "requesting-user-name", NULL, cupsUser ());
+      ippAddStrings (request, IPP_TAG_OPERATION, IPP_TAG_KEYWORD,
+                     "requested-attributes", G_N_ELEMENTS (requested_attrs), NULL, requested_attrs);
+      response = cupsDoRequest (CUPS_HTTP_DEFAULT, request, "/");
+
+      if (response)
+        {
+          if (ippGetStatusCode (response) <= IPP_OK_CONFLICT)
+            {
+              ipp_attribute_t *attr_username = NULL;
+              ipp_attribute_t *attr_printer_uri = NULL;
+
+              attr_username = ippFindAttribute(response, "job-originating-user-name", IPP_TAG_NAME);
+              attr_printer_uri = ippFindAttribute(response, "job-printer-uri", IPP_TAG_URI);
+              if (attr_username && attr_printer_uri &&
+                  g_strcmp0 (ippGetString (attr_username, 0, NULL), cupsUser ()) == 0 &&
+                  g_strrstr (ippGetString (attr_printer_uri, 0, NULL), "/") != 0 &&
+                  priv->current_dest >= 0 &&
+                  priv->current_dest < priv->num_dests &&
+                  priv->dests != NULL &&
+                  g_strcmp0 (g_strrstr (ippGetString (attr_printer_uri, 0, NULL), "/") + 1,
+                             priv->dests[priv->current_dest].name) == 0)
+                    update_jobs_count (self);
+            }
+          ippDelete(response);
+        }
+      g_free (job_uri);
+    }
+}
+
+static void
 on_cups_notification (GDBusConnection *connection,
                       const char      *sender_name,
                       const char      *object_path,
@@ -280,7 +335,7 @@ on_cups_notification (GDBusConnection *connection,
                       gpointer         user_data)
 {
   CcPrintersPanel        *self = (CcPrintersPanel*) user_data;
-  CcPrintersPanelPrivate *priv;
+  PpCups                 *cups;
   gboolean                printer_is_accepting_jobs;
   gchar                  *printer_name = NULL;
   gchar                  *text = NULL;
@@ -292,11 +347,6 @@ on_cups_notification (GDBusConnection *connection,
   gint                    printer_state;
   gint                    job_state;
   gint                    job_impressions_completed;
-  static const char * const requested_attrs[] = {
-    "job-printer-uri",
-    "job-originating-user-name"};
-
-  priv = PRINTERS_PANEL_PRIVATE (self);
 
   if (g_strcmp0 (signal_name, "PrinterAdded") != 0 &&
       g_strcmp0 (signal_name, "PrinterDeleted") != 0 &&
@@ -342,55 +392,19 @@ on_cups_notification (GDBusConnection *connection,
   else if (g_strcmp0 (signal_name, "JobCreated") == 0 ||
            g_strcmp0 (signal_name, "JobCompleted") == 0)
     {
-      http_t *http;
-      gchar  *job_uri;
-      ipp_t  *request, *response;
-
-      job_uri = g_strdup_printf ("ipp://localhost/jobs/%d", job_id);
-      if ((http = httpConnectEncrypt (cupsServer (), ippPort (),
-                                     cupsEncryption ())) != NULL)
-        {
-          request = ippNewRequest (IPP_GET_JOB_ATTRIBUTES);
-          ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_URI,
-                       "job-uri", NULL, job_uri);
-          ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_NAME,
-                        "requesting-user-name", NULL, cupsUser ());
-          ippAddStrings (request, IPP_TAG_OPERATION, IPP_TAG_KEYWORD,
-                         "requested-attributes", G_N_ELEMENTS (requested_attrs), NULL, requested_attrs);
-          response = cupsDoRequest (http, request, "/");
-
-          if (response)
-            {
-              if (ippGetStatusCode (response) <= IPP_OK_CONFLICT)
-                {
-                  ipp_attribute_t *attr_username = NULL;
-                  ipp_attribute_t *attr_printer_uri = NULL;
-
-                  attr_username = ippFindAttribute(response, "job-originating-user-name", IPP_TAG_NAME);
-                  attr_printer_uri = ippFindAttribute(response, "job-printer-uri", IPP_TAG_URI);
-                  if (attr_username && attr_printer_uri &&
-                      g_strcmp0 (ippGetString (attr_username, 0, NULL), cupsUser ()) == 0 &&
-                      g_strrstr (ippGetString (attr_printer_uri, 0, NULL), "/") != 0 &&
-                      priv->current_dest >= 0 &&
-                      priv->current_dest < priv->num_dests &&
-                      priv->dests != NULL &&
-                      g_strcmp0 (g_strrstr (ippGetString (attr_printer_uri, 0, NULL), "/") + 1,
-                                 priv->dests[priv->current_dest].name) == 0)
-                    update_jobs_count (self);
-                }
-              ippDelete(response);
-            }
-          httpClose (http);
-        }
-      g_free (job_uri);
+      cups = pp_cups_new ();
+      pp_cups_connection_test_async (cups, on_cups_notification_cb, self);
     }
 }
 
-static gboolean
-renew_subscription (gpointer data)
+static void
+renew_subscription_cb (GObject      *source_object,
+                       GAsyncResult *res,
+                       gpointer      user_data)
 {
   CcPrintersPanelPrivate *priv;
-  CcPrintersPanel        *self = (CcPrintersPanel*) data;
+  CcPrintersPanel        *self = (CcPrintersPanel*) user_data;
+  gboolean                success;
   static const char * const events[] = {
           "printer-added",
           "printer-deleted",
@@ -401,15 +415,31 @@ renew_subscription (gpointer data)
 
   priv = PRINTERS_PANEL_PRIVATE (self);
 
-  priv->subscription_id = renew_cups_subscription (priv->subscription_id,
-                                                   events,
-                                                   G_N_ELEMENTS (events),
-                                                   SUBSCRIPTION_DURATION);
-
-  if (priv->subscription_id > 0)
-    return TRUE;
+  success = pp_cups_connection_test_finish (source_object, res, NULL);
+  if (!success)
+    g_debug ("Connection to CUPS server \'%s\' failed.", cupsServer ());
   else
-    return FALSE;
+    priv->subscription_id = pp_cups_renew_subscription (priv->subscription_id,
+                                                        events,
+                                                        G_N_ELEMENTS (events),
+                                                        SUBSCRIPTION_DURATION);
+}
+
+static gboolean
+renew_subscription (gpointer user_data)
+{
+  CcPrintersPanelPrivate *priv;
+  CcPrintersPanel        *self = (CcPrintersPanel*) user_data;
+  PpCups                 *cups;
+
+  priv = PRINTERS_PANEL_PRIVATE (self);
+  if (priv->subscription_id > 0)
+    return G_SOURCE_REMOVE;
+
+  cups = pp_cups_new ();
+  pp_cups_connection_test_async (cups, renew_subscription_cb, user_data);
+
+  return G_SOURCE_CONTINUE;
 }
 
 static void
@@ -472,7 +502,7 @@ detach_from_cups_notifier (gpointer data)
     priv->dbus_subscription_id = 0;
   }
 
-  cancel_cups_subscription (priv->subscription_id);
+  pp_cups_cancel_subscription (priv->subscription_id);
   priv->subscription_id = 0;
 
   if (priv->subscription_renewal_id != 0) {
@@ -2529,7 +2559,7 @@ test_page_cb (GtkButton *button,
               ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_NAME,
               /* Translators: Name of job which makes printer to print test page */
                             "job-name", NULL, _("Test page"));
-              response = cupsDoFileRequest (http, request, resource, filename);
+              response = cupsDoFileRequest (CUPS_HTTP_DEFAULT, request, resource, filename);
               httpClose (http);
             }
 

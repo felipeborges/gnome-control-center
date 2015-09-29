@@ -73,6 +73,13 @@ gboolean     pp_cups_connection_test_finish (GObject              *source_object
                                              GAsyncResult         *result,
                                              gpointer              user_data);
 
+void         pp_cups_cancel_subscription    (gint id);
+
+gint         pp_cups_renew_subscription     (gint                id,
+                                             const char * const *events,
+                                             gint                num_events,
+                                             gint                lease_duration);
+
 G_END_DECLS
 
 #endif /* __PP_CUPS_H__ */

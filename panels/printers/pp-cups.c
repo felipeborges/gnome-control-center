@@ -138,13 +138,119 @@ pp_cups_connection_test_finish (GObject      *source_object,
   connection = g_socket_client_connect_to_host_finish (G_SOCKET_CLIENT (source_object),
                                                        result, &error);
 
-  if (connection)
-  {
-    g_io_stream_close (G_IO_STREAM (connection), NULL, NULL);
-    g_object_unref (connection);
+  if (connection != NULL)
+    {
+      g_io_stream_close (G_IO_STREAM (connection), NULL, NULL);
+      g_object_unref (connection);
 
-    return TRUE;
-  }
+      return TRUE;
+    }
 
   return FALSE;
 }
+
+/* Returns id of renewed subscription or new id */
+gint
+pp_cups_renew_subscription (gint id,
+                            const char * const *events,
+                            gint num_events,
+                            gint lease_duration)
+{
+  ipp_attribute_t              *attr = NULL;
+  ipp_t                        *request;
+  ipp_t                        *response = NULL;
+  gint                          result = -1;
+
+  if (id >= 0)
+    {
+      request = ippNewRequest (IPP_RENEW_SUBSCRIPTION);
+      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_URI,
+                    "printer-uri", NULL, "/");
+      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_NAME,
+                    "requesting-user-name", NULL, cupsUser ());
+      ippAddInteger (request, IPP_TAG_OPERATION, IPP_TAG_INTEGER,
+                     "notify-subscription-id", id);
+      ippAddInteger (request, IPP_TAG_SUBSCRIPTION, IPP_TAG_INTEGER,
+                     "notify-lease-duration", lease_duration);
+      response = cupsDoRequest (CUPS_HTTP_DEFAULT, request, "/");
+      if (response != NULL &&
+          ippGetStatusCode (response) <= IPP_OK_CONFLICT)
+        {
+          if ((attr = ippFindAttribute (response, "notify-lease-duration",
+                                        IPP_TAG_INTEGER)) == NULL)
+            g_debug ("No notify-lease-duration in response!\n");
+          else
+            if (ippGetInteger (attr, 0) == lease_duration)
+              result = id;
+        }
+    }
+
+  if (result < 0)
+    {
+      request = ippNewRequest (IPP_CREATE_PRINTER_SUBSCRIPTION);
+      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_URI,
+                    "printer-uri", NULL, "/");
+      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_NAME,
+                    "requesting-user-name", NULL, cupsUser ());
+      ippAddStrings (request, IPP_TAG_SUBSCRIPTION, IPP_TAG_KEYWORD,
+                     "notify-events", num_events, NULL, events);
+      ippAddString (request, IPP_TAG_SUBSCRIPTION, IPP_TAG_KEYWORD,
+                    "notify-pull-method", NULL, "ippget");
+      ippAddString (request, IPP_TAG_SUBSCRIPTION, IPP_TAG_URI,
+                    "notify-recipient-uri", NULL, "dbus://");
+      ippAddInteger (request, IPP_TAG_SUBSCRIPTION, IPP_TAG_INTEGER,
+                     "notify-lease-duration", lease_duration);
+      response = cupsDoRequest (CUPS_HTTP_DEFAULT, request, "/");
+
+      if (response != NULL &&
+          ippGetStatusCode (response) <= IPP_OK_CONFLICT)
+        {
+          if ((attr = ippFindAttribute (response, "notify-subscription-id",
+               IPP_TAG_INTEGER)) == NULL)
+            g_debug ("No notify-subscription-id in response!\n");
+          else
+            result = ippGetInteger (attr, 0);
+       }
+
+      if (response)
+        ippDelete (response);
+    }
+
+  return result;
+}
+
+/* Cancels subscription of given id */
+static void
+pp_cups_cancel_subscription_cb (GObject      *source_object,
+                                GAsyncResult *result,
+                                gpointer      user_data)
+{
+  gboolean success;
+  gint id = GPOINTER_TO_INT (user_data);
+
+  success = pp_cups_connection_test_finish (source_object, result, NULL);
+  ipp_t  *request;
+
+  if (id >= 0 && success)
+    {
+      request = ippNewRequest (IPP_CANCEL_SUBSCRIPTION);
+      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_URI,
+                    "printer-uri", NULL, "/");
+      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_NAME,
+                    "requesting-user-name", NULL, cupsUser ());
+      ippAddInteger (request, IPP_TAG_OPERATION, IPP_TAG_INTEGER,
+                     "notify-subscription-id", id);
+      ippDelete (cupsDoRequest (CUPS_HTTP_DEFAULT, request, "/"));
+    }
+}
+
+void
+pp_cups_cancel_subscription (gint id)
+{
+  PpCups *cups;
+
+  cups = pp_cups_new ();
+  pp_cups_connection_test_async (cups, pp_cups_cancel_subscription_cb, GINT_TO_POINTER (id));
+}
+
+
