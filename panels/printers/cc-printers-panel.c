@@ -39,6 +39,7 @@
 #include "pp-utils.h"
 #include "pp-maintenance-command.h"
 #include "pp-cups.h"
+#include "pp-job.h"
 
 CC_PANEL_REGISTER (CcPrintersPanel, cc_printers_panel)
 
@@ -271,58 +272,50 @@ cc_printers_panel_class_init (CcPrintersPanelClass *klass)
 }
 
 static void
-on_cups_notification_cb (GObject      *source_object,
-                         GAsyncResult *res,
-                         gpointer      user_data)
+on_get_job_attributes_cb (GObject      *source_object,
+                          GAsyncResult *res,
+                          gpointer      user_data)
 {
-  CcPrintersPanel *self = user_data;
+  CcPrintersPanel        *self = (CcPrintersPanel*) user_data;
   CcPrintersPanelPrivate *priv;
-  gchar  *job_uri;
-  ipp_t  *request, *response;
-  gboolean success;
-  gint job_id = 0; // need to get job_id
-  static const char * const requested_attrs[] = {
-    "job-printer-uri",
-    "job-originating-user-name"};
+  const gchar            *job_originating_user_name;
+  const gchar            *job_printer_uri;
+  GVariant               *attributes;
+  GVariant               *username;
+  GVariant               *printer_uri;
+  GError                 *error = NULL;
 
   priv = PRINTERS_PANEL_PRIVATE (self);
 
-  success = pp_cups_connection_test_finish (source_object, res, NULL);
-  if (success)
+  attributes = pp_job_get_attributes_finish (PP_JOB (source_object), res, &error);
+  g_object_unref (source_object);
+
+  if (attributes != NULL)
     {
-      job_uri = g_strdup_printf ("ipp://localhost/jobs/%d", job_id);
-      request = ippNewRequest (IPP_GET_JOB_ATTRIBUTES);
-      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_URI,
-                    "job-uri", NULL, job_uri);
-      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_NAME,
-                    "requesting-user-name", NULL, cupsUser ());
-      ippAddStrings (request, IPP_TAG_OPERATION, IPP_TAG_KEYWORD,
-                     "requested-attributes", G_N_ELEMENTS (requested_attrs), NULL, requested_attrs);
-      response = cupsDoRequest (CUPS_HTTP_DEFAULT, request, "/");
-
-      if (response)
+      if ((username = g_variant_lookup_value (attributes, "job-originating-user-name", G_VARIANT_TYPE ("as"))) != NULL &&
+          (printer_uri = g_variant_lookup_value (attributes, "job-printer-uri", G_VARIANT_TYPE ("as"))) != NULL)
         {
-          if (ippGetStatusCode (response) <= IPP_OK_CONFLICT)
-            {
-              ipp_attribute_t *attr_username = NULL;
-              ipp_attribute_t *attr_printer_uri = NULL;
+          job_originating_user_name = g_variant_get_string (g_variant_get_child_value (username, 0), NULL);
+          job_printer_uri = g_variant_get_string (g_variant_get_child_value (printer_uri, 0), NULL);
 
-              attr_username = ippFindAttribute(response, "job-originating-user-name", IPP_TAG_NAME);
-              attr_printer_uri = ippFindAttribute(response, "job-printer-uri", IPP_TAG_URI);
-              if (attr_username && attr_printer_uri &&
-                  g_strcmp0 (ippGetString (attr_username, 0, NULL), cupsUser ()) == 0 &&
-                  g_strrstr (ippGetString (attr_printer_uri, 0, NULL), "/") != 0 &&
-                  priv->current_dest >= 0 &&
-                  priv->current_dest < priv->num_dests &&
-                  priv->dests != NULL &&
-                  g_strcmp0 (g_strrstr (ippGetString (attr_printer_uri, 0, NULL), "/") + 1,
-                             priv->dests[priv->current_dest].name) == 0)
-                    update_jobs_count (self);
+          g_variant_unref (username);
+          g_variant_unref (printer_uri);
+
+          if (job_originating_user_name && job_printer_uri &&
+              g_strcmp0 (job_originating_user_name, cupsUser ()) == 0 &&
+              g_strrstr (job_printer_uri, "/") != 0 &&
+              priv->current_dest >= 0 &&
+              priv->current_dest < priv->num_dests &&
+              priv->dests != NULL &&
+              g_strcmp0 (g_strrstr (job_printer_uri, "/") + 1,
+                         priv->dests[priv->current_dest].name) == 0)
+            {
+              update_jobs_count (self);
             }
-          ippDelete(response);
         }
-      g_free (job_uri);
     }
+
+  g_variant_unref (attributes);
 }
 
 static void
@@ -335,7 +328,6 @@ on_cups_notification (GDBusConnection *connection,
                       gpointer         user_data)
 {
   CcPrintersPanel        *self = (CcPrintersPanel*) user_data;
-  PpCups                 *cups;
   gboolean                printer_is_accepting_jobs;
   gchar                  *printer_name = NULL;
   gchar                  *text = NULL;
@@ -392,8 +384,18 @@ on_cups_notification (GDBusConnection *connection,
   else if (g_strcmp0 (signal_name, "JobCreated") == 0 ||
            g_strcmp0 (signal_name, "JobCompleted") == 0)
     {
-      cups = pp_cups_new ();
-      pp_cups_connection_test_async (cups, on_cups_notification_cb, self);
+      PpJob *job = g_object_new (PP_TYPE_JOB, "id", job_id, NULL);
+
+      static gchar *requested_attrs[] = {
+        "job-printer-uri",
+        "job-originating-user-name",
+        NULL };
+
+      pp_job_get_attributes_async (job,
+                                   requested_attrs,
+                                   NULL,
+                                   on_get_job_attributes_cb,
+                                   self);
     }
 }
 
@@ -1101,9 +1103,11 @@ actualize_printers_list_cb (GObject      *source_object,
   GtkTreeIter             iter;
   cups_job_t             *jobs = NULL;
   GtkWidget              *widget;
+  PpCupsDests            *cups_dests;
   gboolean                paused = FALSE;
   gboolean                selected_iter_set = FALSE;
   gboolean                valid = FALSE;
+  PpCups                 *cups = PP_CUPS (source_object);
   gchar                  *current_printer_name = NULL;
   gchar                  *printer_icon_name = NULL;
   gchar                  *default_icon_name = NULL;
@@ -1112,8 +1116,6 @@ actualize_printers_list_cb (GObject      *source_object,
   int                     current_dest = -1;
   int                     i, j;
   int                     num_jobs = 0;
-  PpCups                 *cups = PP_CUPS (source_object);
-  PpCupsDests            *cups_dests;
   GError                 *error = NULL;
 
   priv = PRINTERS_PANEL_PRIVATE (self);

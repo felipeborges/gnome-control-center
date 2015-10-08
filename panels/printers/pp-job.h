@@ -22,6 +22,8 @@
 #define __PP_JOB_H__
 
 #include <glib-object.h>
+#include <gio/gio.h>
+#include <cups/cups.h>
 
 G_BEGIN_DECLS
 
@@ -32,6 +34,16 @@ struct _PpJob
 {
   GObject parent_instance;
 };
+
+void           pp_job_get_attributes_async       (PpJob                *job,
+                                                  gchar               **attributes_names,
+                                                  GCancellable         *cancellable,
+                                                  GAsyncReadyCallback   callback,
+                                                  gpointer              user_data);
+
+GVariant      *pp_job_get_attributes_finish      (PpJob                *job,
+                                                  GAsyncResult         *result,
+                                                  GError              **error);
 
 G_END_DECLS
 

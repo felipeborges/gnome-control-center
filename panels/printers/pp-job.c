@@ -131,3 +131,143 @@ pp_job_class_init (PpJobClass *class)
                                              0, G_MAXINT, 0, G_PARAM_READWRITE);
   g_object_class_install_properties (object_class, LAST_PROPERTY, properties);
 }
+
+static void
+_pp_job_get_attributes_thread (GTask        *task,
+                               gpointer      source_object,
+                               gpointer      task_data,
+                               GCancellable *cancellable)
+{
+  ipp_attribute_t *attr = NULL;
+  GVariantBuilder  builder;
+  GVariant        *attributes = NULL;
+  gchar          **attributes_names = task_data;
+  PpJobPrivate    *priv;
+  ipp_t           *request;
+  ipp_t           *response = NULL;
+  gchar           *job_uri;
+  gchar          **requested_attrs = NULL;
+  gint             i, j, length = 0, n_attrs = 0;
+
+  priv = pp_job_get_instance_private (source_object);
+
+  job_uri = g_strdup_printf ("ipp://localhost/jobs/%d", priv->id);
+
+  if (attributes_names)
+    {
+      length = g_strv_length (attributes_names);
+
+      requested_attrs = g_new0 (char *, length);
+      for (i = 0; attributes_names[i]; i++)
+        requested_attrs[i] = g_strdup (attributes_names[i]);
+
+      request = ippNewRequest (IPP_GET_JOB_ATTRIBUTES);
+      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_URI,
+                    "job-uri", NULL, job_uri);
+      ippAddString (request, IPP_TAG_OPERATION, IPP_TAG_NAME,
+                    "requesting-user-name", NULL, cupsUser ());
+      ippAddStrings (request, IPP_TAG_OPERATION, IPP_TAG_KEYWORD,
+                     "requested-attributes", length, NULL, (const char **) requested_attrs);
+      response = cupsDoRequest (CUPS_HTTP_DEFAULT, request, "/");
+    }
+
+  if (response != NULL)
+    {
+      g_variant_builder_init (&builder, G_VARIANT_TYPE ("a{sv}"));
+
+      for (j = 0; j < length; j++)
+        {
+          attr = ippFindAttribute (response, requested_attrs[j], IPP_TAG_ZERO);
+          n_attrs = ippGetCount (attr);
+          if (attr && n_attrs > 0 && ippGetValueTag (attr) != IPP_TAG_NOVALUE)
+            {
+              const GVariantType *type = NULL;
+              GVariant           *values[n_attrs];
+              GVariant           *range[2];
+              gint                range_uppervalue;
+
+              switch (ippGetValueTag (attr))
+                {
+                  case IPP_TAG_INTEGER:
+                  case IPP_TAG_ENUM:
+                    type = G_VARIANT_TYPE_INT32;
+
+                    for (i = 0; i < n_attrs; i++)
+                      values[i] = g_variant_new_int32 (ippGetInteger (attr, i));
+                    break;
+
+                  case IPP_TAG_NAME:
+                  case IPP_TAG_STRING:
+                  case IPP_TAG_TEXT:
+                  case IPP_TAG_URI:
+                  case IPP_TAG_KEYWORD:
+                  case IPP_TAG_URISCHEME:
+                    type = G_VARIANT_TYPE_STRING;
+
+                    for (i = 0; i < n_attrs; i++)
+                      values[i] = g_variant_new_string (g_strdup (ippGetString (attr, i, NULL)));
+                    break;
+
+                  case IPP_TAG_RANGE:
+                    type = G_VARIANT_TYPE_TUPLE;
+
+                    for (i = 0; i < n_attrs; i++)
+                      {
+                        range[0] = g_variant_new_int32 (ippGetRange (attr, i, &(range_uppervalue)));
+                        range[1] = g_variant_new_int32 (range_uppervalue);
+
+                        values[i] = g_variant_new_tuple (range, 2);
+                      }
+                    break;
+
+                  case IPP_TAG_BOOLEAN:
+                    type = G_VARIANT_TYPE_BOOLEAN;
+
+                    for (i = 0; i < n_attrs; i++)
+                      values[i] = g_variant_new_boolean (ippGetBoolean (attr, i));
+                    break;
+
+                  default:
+                    /* do nothing (switch w/ enumeration type) */
+                    break;
+                }
+
+              g_variant_builder_add (&builder, "{sv}",
+                                     g_strdup (requested_attrs[j]),
+                                     g_variant_new_array (type, values, n_attrs));
+
+            }
+        }
+
+      attributes = g_variant_builder_end (&builder);
+    }
+  g_free (job_uri);
+
+  g_task_return_pointer (task, attributes, g_object_unref);
+}
+
+void
+pp_job_get_attributes_async (PpJob                *job,
+                             gchar               **attributes_names,
+                             GCancellable         *cancellable,
+                             GAsyncReadyCallback   callback,
+                             gpointer              user_data)
+{
+  GTask *task;
+
+  task = g_task_new (job, cancellable, callback, user_data);
+  g_task_set_task_data (task, g_strdupv (attributes_names), g_free);
+  g_task_run_in_thread (task, _pp_job_get_attributes_thread);
+
+  g_object_unref (task);
+}
+
+GVariant *
+pp_job_get_attributes_finish (PpJob         *job,
+                              GAsyncResult  *result,
+                              GError       **error)
+{
+  g_return_val_if_fail (g_task_is_valid (result, job), NULL);
+
+  return g_task_propagate_pointer (G_TASK (result), error);
+}
