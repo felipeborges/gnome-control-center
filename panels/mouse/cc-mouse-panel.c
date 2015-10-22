@@ -126,11 +126,6 @@ cc_mouse_panel_init (CcMousePanel *self)
   priv->prefs_widget = cc_mouse_properties_new ();
   priv->test_widget = cc_mouse_test_new ();
 
-  gtk_widget_set_margin_start (priv->prefs_widget, 6);
-  gtk_widget_set_margin_end (priv->prefs_widget, 6);
-  gtk_widget_set_margin_top (priv->prefs_widget, 6);
-  gtk_widget_set_margin_bottom (priv->prefs_widget, 6);
-
   gtk_container_add (GTK_CONTAINER (self), priv->prefs_widget);
   gtk_widget_show (priv->prefs_widget);
   gtk_widget_show (priv->test_widget);
